@@ -22,13 +22,49 @@ const {
 
 const {
   Store,
-  Engine,
+  Engine: BaseEngine,
   GameError,
   dayInParis,
   createEvent,
 } = require('./engine');
 
 const { arena } = require('./arena');
+
+// Conserve les parties et les tentatives quotidiennes.
+// Une remise à zéro exclut uniquement les séries déjà terminées.
+class Engine extends BaseEngine {
+  rankings(e = this.store.event()) {
+    return super.rankings({
+      ...e,
+      games: Object.fromEntries(
+        Object.entries(e.games).filter(([, g]) => !g.scoreExcluded)
+      ),
+    });
+  }
+
+  resetRankings(actor) {
+    return this.store.change((s, e) => {
+      const id = `reset-${randomUUID().slice(0, 12)}`;
+
+      s.events[id] = {
+        ...structuredClone(e),
+        id,
+        boards: [],
+        panels: [],
+        resetBy: actor,
+        resetAt: Date.now(),
+      };
+
+      for (const g of Object.values(e.games)) {
+        if (g.type === 'solo' && g.phase === 'finished') {
+          g.scoreExcluded = true;
+        }
+      }
+
+      return id;
+    });
+  }
+}
 
 const C = {
   red: 0xE52649,
@@ -40,12 +76,12 @@ const C = {
 const sleep = ms =>
   new Promise(resolve => setTimeout(resolve, ms));
 
-const clean = value =>
-  String(value)
+const clean = s =>
+  String(s)
     .replace(/([\\`*_~|>])/g, '\\$1')
     .replace(/@/g, '@\u200b');
 
-const displayDate = (date, lang) =>
+const displayDate = (d, lang) =>
   new Intl.DateTimeFormat(
     lang === 'en' ? 'en-GB' : 'fr-FR',
     {
@@ -53,7 +89,7 @@ const displayDate = (date, lang) =>
       month: 'long',
       timeZone: 'UTC',
     }
-  ).format(new Date(date));
+  ).format(new Date(d));
 
 const T = {
   fr: {
@@ -67,7 +103,6 @@ const T = {
     left: 'Gauche',
     centre: 'Centre',
     right: 'Droite',
-
     next: 'Tir suivant',
     shoot: 'Choisir mon tir',
     dive: 'Choisir ma parade',
@@ -112,7 +147,7 @@ const T = {
       'Série d’entraînement terminée. Tu peux en relancer une depuis le menu.',
 
     lockedChoice:
-      '🔒 Ton choix est enregistré et reste secret. Attends le choix de ton adversaire sur le message du duel.',
+      '🔒 Ton choix est enregistré et reste secret. Ton écran privé sera actualisé quand ton adversaire aura choisi.',
 
     pickOpponent:
       'Choisis le supporter que tu veux défier. Il recevra une invitation ici.',
@@ -145,49 +180,34 @@ const T = {
     errors: {
       dates:
         'Utilise des dates valides au format AAAA-MM-JJ, dans le bon ordre.',
-
       notStarted:
         'L’événement n’a pas encore commencé.',
-
       ended:
         'L’événement est terminé.',
-
       missing:
         'Cette partie n’est plus disponible.',
-
       owner:
         'Ce bouton est réservé au joueur concerné.',
-
       oldDay:
         'Cette série appartient à une journée terminée. Relance ton défi du jour.',
-
       stale:
         'Cette étape est déjà terminée. Utilise le dernier écran de la partie ou reprends-la depuis le menu.',
-
       invalid:
         'Cette action n’est pas disponible.',
-
       self:
         'Choisis un autre supporter pour le duel.',
-
       busy:
         'Toi ou ton adversaire avez déjà un duel en cours. Termine-le ou attends son expiration.',
-
       expired:
         'Le délai du duel est dépassé.',
-
       locked:
         'Tu as déjà choisi. Ton choix reste secret jusqu’à la fin de ce tir.',
-
       oldEvent:
         'Ce menu appartient à un ancien événement. Utilise le nouveau menu.',
-
       staff:
         'Cette commande est réservée au staff.',
-
       bot:
         'Choisis un membre du serveur, pas un bot.',
-
       general:
         'Impossible de terminer cette action. Réessaie depuis le menu. Si cela continue, préviens le staff.',
     },
@@ -204,7 +224,6 @@ const T = {
     left: 'Left',
     centre: 'Centre',
     right: 'Right',
-
     next: 'Next penalty',
     shoot: 'Choose my shot',
     dive: 'Choose my save',
@@ -249,7 +268,7 @@ const T = {
       'Training complete. Start another set from the menu whenever you like.',
 
     lockedChoice:
-      '🔒 Your choice is saved and stays secret. Wait for your opponent’s choice on the duel message.',
+      '🔒 Your choice is saved and stays secret. Your private game screen will update once your opponent has chosen.',
 
     pickOpponent:
       'Choose the supporter you want to challenge. Their invitation will appear here.',
@@ -282,49 +301,34 @@ const T = {
     errors: {
       dates:
         'Use valid YYYY-MM-DD dates in the right order.',
-
       notStarted:
         'The event has not started yet.',
-
       ended:
         'The event has ended.',
-
       missing:
         'This game is no longer available.',
-
       owner:
         'This button is only for the relevant player.',
-
       oldDay:
         'This set belongs to a previous day. Start your new daily challenge.',
-
       stale:
         'This step is already complete. Use the latest game screen or resume from the menu.',
-
       invalid:
         'This action is not available.',
-
       self:
         'Pick another supporter for your duel.',
-
       busy:
         'You or your opponent already have an active duel. Finish it or wait for it to expire.',
-
       expired:
         'The duel timed out.',
-
       locked:
         'You already chose. Your choice stays secret until the shot is resolved.',
-
       oldEvent:
         'This menu belongs to a previous event. Please use the new menu.',
-
       staff:
         'This command is for staff only.',
-
       bot:
         'Choose a server member, not a bot.',
-
       general:
         'This action could not be completed. Try again from the menu. If it keeps happening, contact the staff.',
     },
@@ -337,14 +341,14 @@ const button = (
   style = ButtonStyle.Secondary,
   emoji
 ) => {
-  const component = new ButtonBuilder()
+  const b = new ButtonBuilder()
     .setCustomId(id)
     .setLabel(label)
     .setStyle(style);
 
-  if (emoji) component.setEmoji(emoji);
+  if (emoji) b.setEmoji(emoji);
 
-  return component;
+  return b;
 };
 
 const row = (...buttons) =>
@@ -353,395 +357,311 @@ const row = (...buttons) =>
 const baseEmbed = () =>
   new EmbedBuilder()
     .setColor(C.red)
-    .setFooter({
-      text: 'PARIS • Halloween',
-    });
+    .setFooter({ text: 'PARIS • Halloween' });
 
-function panelPayload(event, lang, image) {
-  const text = T[lang];
+function panelPayload(e, lang, image) {
+  const t = T[lang];
 
   const embed = baseEmbed()
     .setTitle(
       lang === 'en'
         ? 'PENALTIES OF FEAR 👻'
-        : `${event.title} 👻`
+        : `${e.title} 👻`
     )
-    .setDescription(text.intro)
+    .setDescription(t.intro)
     .addFields({
       name: '🗓️',
       value:
-        `${displayDate(event.start, lang)} → ` +
-        `${displayDate(event.end, lang)} · ` +
-        (lang === 'en'
-          ? 'Paris time'
-          : 'Heure de Paris'),
+        `${displayDate(e.start, lang)} → ${displayDate(e.end, lang)}` +
+        ` · ${lang === 'en' ? 'Paris time' : 'Heure de Paris'}`,
     });
 
   if (image) embed.setImage(image);
 
   return {
     embeds: [embed],
-
     components: [
       row(
         button(
-          `p:${event.id}:daily:${lang}`,
-          text.daily,
+          `p:${e.id}:daily:${lang}`,
+          t.daily,
           ButtonStyle.Danger,
           '⚽'
         ),
-
         button(
-          `p:${event.id}:training:${lang}`,
-          text.training,
+          `p:${e.id}:training:${lang}`,
+          t.training,
           ButtonStyle.Secondary,
           '👟'
         ),
-
         button(
-          `p:${event.id}:duel:${lang}`,
-          text.duel,
+          `p:${e.id}:duel:${lang}`,
+          t.duel,
           ButtonStyle.Primary,
           '🤝'
         )
       ),
-
       row(
         button(
-          `p:${event.id}:ranking:${lang}`,
-          text.ranking,
+          `p:${e.id}:ranking:${lang}`,
+          t.ranking,
           ButtonStyle.Secondary,
           '🏆'
         ),
-
         button(
-          `p:${event.id}:profile:${lang}`,
-          text.profile,
+          `p:${e.id}:profile:${lang}`,
+          t.profile,
           ButtonStyle.Secondary,
           '📊'
         ),
-
         button(
-          `p:${event.id}:rules:${lang}`,
-          text.rules,
+          `p:${e.id}:rules:${lang}`,
+          t.rules,
           ButtonStyle.Secondary,
           '📖'
         )
       ),
     ],
-
-    allowedMentions: {
-      parse: [],
-    },
+    allowedMentions: { parse: [] },
   };
 }
 
 function directions(prefix, lang) {
-  const text = T[lang];
+  const t = T[lang];
 
   return row(
     button(
       `${prefix}:0:${lang}`,
-      text.left,
+      t.left,
       ButtonStyle.Primary,
       '↖️'
     ),
-
     button(
       `${prefix}:1:${lang}`,
-      text.centre,
+      t.centre,
       ButtonStyle.Secondary,
       '⬆️'
     ),
-
     button(
       `${prefix}:2:${lang}`,
-      text.right,
+      t.right,
       ButtonStyle.Danger,
       '↗️'
     )
   );
 }
 
-function score(game, userIndex = 0) {
-  return game.shots.filter(
-    shot =>
-      (
-        game.type !== 'duel' ||
-        shot.shooter === userIndex
-      ) &&
-      shot.goal
+function score(g, userIndex = 0) {
+  return g.shots.filter(
+    s =>
+      (g.type !== 'duel' || s.shooter === userIndex) &&
+      s.goal
   ).length;
 }
 
-function reveal(last, lang) {
-  const text = T[lang];
-
-  const labels = [
-    text.left,
-    text.centre,
-    text.right,
-  ];
-
-  return (
-    `⚽ ${labels[last.shot]}  ·  ` +
-    `🧤 ${labels[last.dive]}`
-  );
-}
-
-async function gamePayload(
-  game,
-  lang,
-  run = false
-) {
-  const text = T[lang];
-  const duel = game.type === 'duel';
+async function gamePayload(g, lang, run = false) {
+  const t = T[lang];
+  const duel = g.type === 'duel';
 
   const fileName =
-    `arena-${game.id}-` +
-    `${randomUUID().slice(0, 8)}.png`;
+    `arena-${g.id}-${randomUUID().slice(0, 8)}.png`;
 
-  const image = new AttachmentBuilder(
-    await arena(
-      game,
-      lang,
-      run ? 'run' : 'normal'
-    ),
-    {
-      name: fileName,
-    }
+  const img = new AttachmentBuilder(
+    await arena(g, lang, run ? 'run' : 'normal'),
+    { name: fileName }
   );
 
   const embed = baseEmbed()
     .setImage(`attachment://${fileName}`);
 
   if (duel) {
-    embed.setFooter({
-      text: `PARIS • Duel ${game.id}`,
-    });
+    embed.setFooter({ text: `PARIS • Duel ${g.id}` });
   }
 
   let components = [];
-  let description = '';
+  let text = '';
 
   if (duel) {
     embed.setTitle(
-      `${clean(game.names[0])} vs ` +
-      `${clean(game.names[1])}`.slice(0, 170)
+      `${clean(g.names[0])} vs ${clean(g.names[1])}`
+        .slice(0, 256)
     );
 
-    if (game.phase === 'invited') {
-      description =
-        `${text.invitation}\n\n` +
-        `<@${game.users[1]}> · ` +
-        (lang === 'en'
-          ? 'Accept before'
-          : 'Accepte avant') +
-        ` <t:${Math.floor(
-          game.expires / 1000
-        )}:T>.`;
+    if (g.phase === 'invited') {
+      text =
+        `${t.invitation}\n\n` +
+        `<@${g.users[1]}> · ` +
+        `${lang === 'en' ? 'Accept before' : 'Accepte avant'} ` +
+        `<t:${Math.floor(g.expires / 1000)}:T>.`;
 
       components = [
         row(
           button(
-            `d:${game.id}:accept:0:${lang}`,
-            text.accept,
+            `d:${g.id}:accept:0:${lang}`,
+            t.accept,
             ButtonStyle.Success,
             '🤝'
           ),
-
           button(
-            `d:${game.id}:leave:0:${lang}`,
-            text.leave,
+            `d:${g.id}:leave:0:${lang}`,
+            t.leave,
             ButtonStyle.Secondary
           )
         ),
       ];
-    } else if (game.phase === 'waiting') {
-      const shooter = game.shots.length % 2;
+    } else if (g.phase === 'waiting') {
+      const sh = g.shots.length % 2;
 
-      description =
-        `⚽ <@${game.users[shooter]}> · ` +
-        (lang === 'en' ? 'Shooter' : 'Tireur') +
-        (
-          game.pending.shot !== undefined
-            ? ' 🔒'
-            : ''
-        ) +
-        `\n\n🧤 <@${game.users[1 - shooter]}> · ` +
-        (lang === 'en'
-          ? 'Goalkeeper'
-          : 'Gardien') +
-        (
-          game.pending.dive !== undefined
-            ? ' 🔒'
-            : ''
-        ) +
-        `\n\n${text.wait}\n` +
-        `⏱️ <t:${Math.floor(
-          game.expires / 1000
-        )}:R>`;
+      text =
+        `⚽ <@${g.users[sh]}> · ` +
+        `${lang === 'en' ? 'Shooter' : 'Tireur'}` +
+        `${g.pending.shot !== undefined ? ' 🔒' : ''}\n\n` +
+        `🧤 <@${g.users[1 - sh]}> · ` +
+        `${lang === 'en' ? 'Goalkeeper' : 'Gardien'}` +
+        `${g.pending.dive !== undefined ? ' 🔒' : ''}\n\n` +
+        `${t.wait}\n` +
+        `⏱️ <t:${Math.floor(g.expires / 1000)}:R>`;
 
       components = [
         row(
           button(
-            `d:${game.id}:shot:${game.shots.length}:${lang}`,
-            text.shoot,
+            `d:${g.id}:shot:${g.shots.length}:${lang}`,
+            t.shoot,
             ButtonStyle.Danger,
             '⚽'
           ),
-
           button(
-            `d:${game.id}:dive:${game.shots.length}:${lang}`,
-            text.dive,
+            `d:${g.id}:dive:${g.shots.length}:${lang}`,
+            t.dive,
             ButtonStyle.Primary,
             '🧤'
           ),
-
           button(
-            `d:${game.id}:leave:${game.shots.length}:${lang}`,
-            text.leave,
+            `d:${g.id}:leave:${g.shots.length}:${lang}`,
+            t.leave,
             ButtonStyle.Secondary
           )
         ),
       ];
-    } else if (game.phase === 'result') {
-      const last = game.shots.at(-1);
+    } else if (g.phase === 'result') {
+      const last = g.shots.at(-1);
 
-      description =
-        `${last.goal ? text.goal : text.save}\n\n` +
+      text =
+        `${last.goal ? t.goal : t.save}\n\n` +
         `${reveal(last, lang)}\n\n` +
-        (lang === 'en'
-          ? 'Time to swap roles.'
-          : 'On échange les rôles.') +
-        `\n⏱️ <t:${Math.floor(
-          game.expires / 1000
-        )}:R>`;
+        `${lang === 'en' ? 'Time to swap roles.' : 'On échange les rôles.'}\n` +
+        `⏱️ <t:${Math.floor(g.expires / 1000)}:R>`;
 
       components = [
         row(
           button(
-            `d:${game.id}:next:${game.shots.length}:${lang}`,
-            text.next,
+            `d:${g.id}:next:${g.shots.length}:${lang}`,
+            t.next,
             ButtonStyle.Primary,
             '⚽'
           ),
-
           button(
-            `d:${game.id}:leave:${game.shots.length}:${lang}`,
-            text.leave,
+            `d:${g.id}:leave:${g.shots.length}:${lang}`,
+            t.leave,
             ButtonStyle.Secondary
           )
         ),
       ];
-    } else if (game.phase === 'finished') {
-      const firstScore = score(game, 0);
-      const secondScore = score(game, 1);
+    } else if (g.phase === 'finished') {
+      const a = score(g, 0);
+      const b = score(g, 1);
 
-      const result =
-        firstScore === secondScore
-          ? text.draw
-          : (
-            `${text.winner} ` +
-            `<@${
-              game.users[
-                firstScore > secondScore ? 0 : 1
-              ]
-            }>`
-          );
-
-      description =
-        `${result}\n\n` +
-        `**${firstScore} - ${secondScore}**\n\n` +
-        text.closed;
+      text =
+        `${
+          a === b
+            ? t.draw
+            : `${t.winner} <@${g.users[a > b ? 0 : 1]}>`
+        }\n\n` +
+        `**${a} - ${b}**\n\n` +
+        t.closed;
     } else {
-      description =
-        game.phase === 'expired'
-          ? text.expiredText
-          : text.closed;
+      text =
+        g.phase === 'expired'
+          ? t.expiredText
+          : t.closed;
     }
   } else {
-    const last = game.shots.at(-1);
+    const last = g.shots.at(-1);
 
     embed.setTitle(
-      game.type === 'training'
-        ? `👟 ${text.training}`
-        : `⚽ ${text.daily}`
+      g.type === 'training'
+        ? `👟 ${t.training}`
+        : `⚽ ${t.daily}`
     );
 
     if (run) {
-      description =
+      text =
         lang === 'en'
           ? 'The stadium holds its breath…'
           : 'Le stade retient son souffle…';
-    } else if (game.phase === 'waiting') {
-      description =
-        `**${
-          lang === 'en' ? 'Penalty' : 'Tir'
-        } ${game.shots.length + 1}/5**\n\n` +
-        text.soloHint +
-        (
-          game.type === 'training'
-            ? `\n\n${text.trainingHint}`
-            : ''
-        );
+    } else if (g.phase === 'waiting') {
+      text =
+        `**${lang === 'en' ? 'Penalty' : 'Tir'} ${g.shots.length + 1}/5**\n\n` +
+        t.soloHint +
+        (g.type === 'training'
+          ? `\n\n${t.trainingHint}`
+          : '');
 
       components = [
         directions(
-          `s:${game.id}:${game.shots.length}`,
+          `s:${g.id}:${g.shots.length}`,
           lang
         ),
       ];
-    } else if (game.phase === 'result') {
-      description =
-        `${last.goal ? text.goal : text.save}\n\n` +
+    } else if (g.phase === 'result') {
+      text =
+        `${last.goal ? t.goal : t.save}\n\n` +
         `${reveal(last, lang)}\n\n` +
-        `**${score(game)} ${
-          lang === 'en' ? 'goal(s)' : 'but(s)'
-        } · ${game.shots.length}/5 ${
-          lang === 'en'
-            ? 'shots taken'
-            : 'tirs joués'
-        }**`;
+        `**${score(g)} ${lang === 'en' ? 'goal(s)' : 'but(s)'}` +
+        ` · ${g.shots.length}/5 ` +
+        `${lang === 'en' ? 'shots taken' : 'tirs joués'}**`;
 
       components = [
         row(
           button(
-            `n:${game.id}:${game.shots.length}:${lang}`,
-            text.next,
+            `n:${g.id}:${g.shots.length}:${lang}`,
+            t.next,
             ButtonStyle.Primary,
             '⚽'
           )
         ),
       ];
     } else {
-      description =
-        `${text.finished}\n\n` +
-        `**${score(game)}/5 ${
-          lang === 'en' ? 'goals' : 'buts'
-        }${
-          game.type === 'solo'
-            ? ` · +${score(game)} point(s)`
-            : ''
-        }**\n\n` +
-        (
-          game.type === 'solo'
-            ? text.saved
-            : text.practiceSaved
-        );
+      text =
+        `${t.finished}\n\n` +
+        `**${score(g)}/5 ${lang === 'en' ? 'goals' : 'buts'}` +
+        (g.type === 'solo'
+          ? ` · +${score(g)} point(s)`
+          : '') +
+        `**\n\n` +
+        (g.type === 'solo'
+          ? t.saved
+          : t.practiceSaved);
+
+      if (g.scoreExcluded) {
+        text =
+          `${t.finished}\n\n` +
+          (lang === 'en'
+            ? 'This set was played before the leaderboard reset. It no longer awards points. Your next daily set is available tomorrow.'
+            : 'Cette série a été jouée avant la remise à zéro du classement. Elle ne rapporte plus de points. Ta prochaine série quotidienne sera disponible demain.');
+      }
 
       components = [
         row(
           button(
-            `p:${game.event}:training:${lang}`,
-            text.training,
+            `p:${g.event}:training:${lang}`,
+            t.training,
             ButtonStyle.Secondary,
             '👟'
           ),
-
           button(
-            `p:${game.event}:ranking:${lang}`,
-            text.ranking,
+            `p:${g.event}:ranking:${lang}`,
+            t.ranking,
             ButtonStyle.Secondary,
             '🏆'
           )
@@ -750,89 +670,125 @@ async function gamePayload(
     }
   }
 
-  if (run) {
-    components = [];
-  }
+  if (run) components = [];
 
-  embed.setDescription(description);
+  embed.setDescription(text);
 
   return {
     content: '',
     embeds: [embed],
-    files: [image],
+    files: [img],
     attachments: [],
     components,
-
-    allowedMentions: {
-      parse: [],
-    },
+    allowedMentions: { parse: [] },
   };
 }
 
-function leaderboardPayload(
-  engine,
-  lang,
-  ownId
-) {
-  const event = engine.store.event();
-  const rankings = engine.rankings(event);
-  const text = T[lang];
+function reveal(last, lang) {
+  const t = T[lang];
+  const labels = [t.left, t.centre, t.right];
 
-  const lines = rankings
-    .slice(0, 15)
-    .map(
-      user =>
-        `${
-          user.rank <= 3
-            ? ['🥇', '🥈', '🥉'][user.rank - 1]
-            : `**${user.rank}.**`
-        } <@${user.id}> · **${user.points} pts**`
-    );
+  return `⚽ ${labels[last.shot]}  ·  🧤 ${labels[last.dive]}`;
+}
 
-  const own = rankings.find(
-    user => user.id === ownId
-  );
+async function privateGamePayload(g, lang, user) {
+  const payload = await gamePayload(g, lang);
 
-  if (
-    own &&
-    !rankings
-      .slice(0, 15)
-      .some(user => user.id === ownId)
-  ) {
-    lines.push(
-      `\n**${own.rank}.** <@${own.id}> · ` +
-      `**${own.points} pts**`
-    );
+  if (g.phase === 'invited' && g.users[0] === user) {
+    payload.components = [
+      row(
+        button(
+          `d:${g.id}:leave:0:${lang}`,
+          T[lang].leave,
+          ButtonStyle.Secondary
+        )
+      ),
+    ];
   }
+
+  if (g.phase === 'waiting') {
+    const role =
+      g.users[g.shots.length % 2] === user
+        ? 'shot'
+        : 'dive';
+
+    const buttons = [];
+
+    if (g.pending[role] === undefined) {
+      buttons.push(
+        button(
+          `d:${g.id}:${role}:${g.shots.length}:${lang}`,
+          role === 'shot'
+            ? T[lang].shoot
+            : T[lang].dive,
+          role === 'shot'
+            ? ButtonStyle.Danger
+            : ButtonStyle.Primary,
+          role === 'shot' ? '⚽' : '🧤'
+        )
+      );
+    }
+
+    buttons.push(
+      button(
+        `d:${g.id}:leave:${g.shots.length}:${lang}`,
+        T[lang].leave,
+        ButtonStyle.Secondary
+      )
+    );
+
+    payload.components = [row(...buttons)];
+  }
+
+  return payload;
+}
+
+function leaderboardPayload(engine, lang, ownId) {
+  const e = engine.store.event();
+  const rows = engine.rankings(e);
+  const t = T[lang];
+
+  const lines = rows.slice(0, 10).map(u => {
+    const position =
+      u.rank <= 3
+        ? ['🥇', '🥈', '🥉'][u.rank - 1]
+        : `**${u.rank}.**`;
+
+    return `${position} <@${u.id}> · **${u.points} pts**`;
+  });
 
   return {
     embeds: [
       baseEmbed()
         .setTitle(
-          `🏆 ${text.ranking} · ${event.title}`
-            .slice(0, 256)
+          `🏆 ${t.ranking} · ${e.title}`.slice(0, 256)
         )
         .setDescription(
-          lines.join('\n\n') || text.noScores
+          lines.join('\n\n') || t.noScores
         )
         .setFooter({
           text:
-            `${displayDate(event.start, lang)} → ` +
-            `${displayDate(event.end, lang)} • ` +
-            (
-              lang === 'en'
-                ? 'Equal points = shared rank'
-                : 'À égalité de points, même place'
-            ),
+            `${displayDate(e.start, lang)} → ${displayDate(e.end, lang)}` +
+            ' • ' +
+            (lang === 'en'
+              ? 'FR + EN • Equal points = shared rank'
+              : 'FR + EN • À égalité de points, même place'),
         })
         .setTimestamp(),
     ],
-
-    components: [],
-
-    allowedMentions: {
-      parse: [],
-    },
+    components: [
+      row(
+        button(
+          `p:${e.id}:myrank:${lang}`,
+          lang === 'en'
+            ? 'View my rank'
+            : 'Mon classement',
+          ButtonStyle.Primary,
+          '📍'
+        )
+      ),
+    ],
+    allowedMentions: { parse: [] },
   };
 }
 
@@ -850,33 +806,27 @@ function commands() {
       'penalty-installer',
       'Publier le menu du jeu dans un salon'
     )
-      .addChannelOption(option =>
-        option
+      .addChannelOption(o =>
+        o
           .setName('salon')
           .setDescription('Salon du jeu')
           .addChannelTypes(0)
           .setRequired(true)
       )
-      .addStringOption(option =>
-        option
+      .addStringOption(o =>
+        o
           .setName('langue')
           .setDescription(
             'Langue de ce menu, classement commun'
           )
           .addChoices(
-            {
-              name: 'Français',
-              value: 'fr',
-            },
-            {
-              name: 'English',
-              value: 'en',
-            }
+            { name: 'Français', value: 'fr' },
+            { name: 'English', value: 'en' }
           )
           .setRequired(true)
       )
-      .addStringOption(option =>
-        option
+      .addStringOption(o =>
+        o
           .setName('image')
           .setDescription(
             'URL HTTPS facultative pour le menu'
@@ -887,31 +837,31 @@ function commands() {
       'penalty-evenement',
       'Créer une nouvelle édition, en archivant la précédente'
     )
-      .addStringOption(option =>
-        option
+      .addStringOption(o =>
+        o
           .setName('titre')
           .setDescription('Nom de cette édition')
           .setMaxLength(100)
           .setRequired(true)
       )
-      .addStringOption(option =>
-        option
+      .addStringOption(o =>
+        o
           .setName('debut')
           .setDescription(
             'Premier jour inclus, AAAA-MM-JJ, heure de Paris'
           )
           .setRequired(true)
       )
-      .addStringOption(option =>
-        option
+      .addStringOption(o =>
+        o
           .setName('fin')
           .setDescription(
             'Dernier jour inclus, AAAA-MM-JJ, heure de Paris'
           )
           .setRequired(true)
       )
-      .addBooleanOption(option =>
-        option
+      .addBooleanOption(o =>
+        o
           .setName('confirmer')
           .setDescription(
             'Oui = nouvelle édition et nouveau classement. Anciennes données conservées.'
@@ -923,41 +873,34 @@ function commands() {
       'penalty-classement',
       'Voir le classement ou publier un classement qui se met à jour'
     )
-      .addChannelOption(option =>
-        option
+      .addChannelOption(o =>
+        o
           .setName('salon')
           .setDescription(
             'Facultatif : y publier le classement'
           )
           .addChannelTypes(0)
       )
-      .addStringOption(option =>
-        option
+      .addStringOption(o =>
+        o
           .setName('langue')
           .setDescription('Langue du classement')
           .addChoices(
-            {
-              name: 'Français',
-              value: 'fr',
-            },
-            {
-              name: 'English',
-              value: 'en',
-            }
+            { name: 'Français', value: 'fr' },
+            { name: 'English', value: 'en' }
           )
       ),
 
     staffCommand(
       'penalty-export',
       'Exporter tous les scores en CSV, sans limite de participants'
-    )
-      .addStringOption(option =>
-        option
-          .setName('edition')
-          .setDescription(
-            'Identifiant facultatif d’une ancienne édition'
-          )
-      ),
+    ).addStringOption(o =>
+      o
+        .setName('edition')
+        .setDescription(
+          'Identifiant facultatif d’une ancienne édition'
+        )
+    ),
 
     staffCommand(
       'penalty-diagnostic',
@@ -967,28 +910,37 @@ function commands() {
     staffCommand(
       'penalty-fermer-duel',
       'Fermer un duel bloqué sans toucher aux points'
-    )
-      .addStringOption(option =>
-        option
-          .setName('id')
-          .setDescription(
-            'ID du duel affiché en bas du message'
-          )
-          .setRequired(true)
-      ),
-  ].map(command => command.toJSON());
+    ).addStringOption(o =>
+      o
+        .setName('id')
+        .setDescription(
+          'ID du duel affiché en bas du message'
+        )
+        .setRequired(true)
+    ),
+
+    staffCommand(
+      'penalty-reset-classement',
+      'Remettre les scores à zéro avec une archive, sans redonner de tentative'
+    ).addBooleanOption(o =>
+      o
+        .setName('confirmer')
+        .setDescription(
+          'Oui = remettre les points FR et EN à zéro. Les tentatives du jour restent utilisées.'
+        )
+        .setRequired(true)
+    ),
+  ].map(c => c.toJSON());
 }
 
 async function main() {
-  for (const key of [
+  for (const k of [
     'DISCORD_TOKEN',
     'DISCORD_CLIENT_ID',
     'DISCORD_GUILD_ID',
   ]) {
-    if (!process.env[key]) {
-      throw new Error(
-        `Variable manquante : ${key}`
-      );
+    if (!process.env[k]) {
+      throw new Error(`Variable manquante : ${k}`);
     }
   }
 
@@ -1044,11 +996,9 @@ async function main() {
     title:
       process.env.EVENT_TITLE ||
       'Les Pénaltys de la peur',
-
     start:
       process.env.EVENT_START ||
       dayInParis(),
-
     end:
       process.env.EVENT_END ||
       dayInParis(),
@@ -1059,20 +1009,63 @@ async function main() {
   });
 
   const client = new Client({
-    intents: [
-      GatewayIntentBits.Guilds,
-    ],
-
-    allowedMentions: {
-      parse: [],
-    },
+    intents: [GatewayIntentBits.Guilds],
+    allowedMentions: { parse: [] },
   });
 
   const queues = new Map();
+  const viewers = new Map();
+  const timers = new Set();
+  const deleting = new Set();
 
   let boardsDirty = 1;
   let refreshing = false;
   let closing = false;
+
+  const later = fn => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+
+      Promise.resolve()
+        .then(fn)
+        .catch(() => {});
+    }, 2000);
+
+    timer.unref();
+    timers.add(timer);
+  };
+
+  const deletePrivate = i =>
+    later(() => i.deleteReply());
+
+  async function remember(g, i, lang) {
+    if (!viewers.has(g.id)) {
+      viewers.set(g.id, new Map());
+    }
+
+    const group = viewers.get(g.id);
+    const previous = group.get(i.user.id);
+
+    const messageId = i.fetchReply
+      ? await i.fetchReply()
+          .then(m => m.id)
+          .catch(() => null)
+      : null;
+
+    if (
+      previous?.messageId &&
+      messageId &&
+      previous.messageId !== messageId
+    ) {
+      deletePrivate(previous.i);
+    }
+
+    group.set(i.user.id, {
+      i,
+      lang,
+      messageId,
+    });
+  }
 
   const queue = (key, fn) => {
     const next = (
@@ -1095,92 +1088,196 @@ async function main() {
   };
 
   const getGame = id => {
-    const event = store.event();
-    const game = event.games[id];
+    const e = store.event();
+    const g = e.games[id];
 
-    if (!game) {
-      throw new GameError('missing');
-    }
+    if (!g) throw new GameError('missing');
 
-    return game;
+    return g;
   };
 
   const publicDuel = id =>
     queue(id, async () => {
-      const game = getGame(id);
+      const g = getGame(id);
 
-      if (!game.message) return;
+      const finished = [
+        'finished',
+        'expired',
+        'cancelled',
+      ].includes(g.phase);
 
-      try {
-        const channel =
-          await client.channels.fetch(
-            game.channel
+      for (
+        const [user, view] of viewers.get(id) || []
+      ) {
+        try {
+          await view.i.editReply(
+            await privateGamePayload(
+              g,
+              view.lang,
+              user
+            )
           );
+        } catch (err) {
+          viewers.get(id)?.delete(user);
 
-        if (!channel?.isTextBased()) {
-          return;
+          console.error(
+            'Écran privé du duel :',
+            err.code || err.name
+          );
+        }
+      }
+
+      if (finished && viewers.has(id)) {
+        for (
+          const view of viewers.get(id).values()
+        ) {
+          deletePrivate(view.i);
         }
 
-        await channel.messages.edit(
-          game.message,
-          await gamePayload(game, game.lang)
-        );
-      } catch (error) {
+        viewers.delete(id);
+      }
+
+      if (!g.message) return;
+
+      try {
+        const ch =
+          await client.channels.fetch(g.channel);
+
+        if (!ch?.isTextBased()) return;
+
         if (
-          [10003, 10008].includes(error.code) &&
-          ['invited', 'waiting', 'result'].includes(
-            game.phase
-          )
+          g.privateUI &&
+          g.phase !== 'invited'
         ) {
-          engine.end(id, '', true);
+          if (!deleting.has(g.message)) {
+            deleting.add(g.message);
+
+            await ch.messages.edit(g.message, {
+              content: finished
+                ? T[g.lang].closed
+                : g.lang === 'en'
+                  ? '🤝 Challenge accepted. Both players are playing privately.'
+                  : '🤝 Défi accepté. Les deux supporters jouent en privé.',
+              embeds: [],
+              attachments: [],
+              components: [],
+              allowedMentions: { parse: [] },
+            });
+
+            later(async () => {
+              try {
+                await ch.messages.delete(
+                  g.message
+                );
+              } finally {
+                deleting.delete(g.message);
+
+                store.change((s, e) => {
+                  if (
+                    e.games[id]?.message ===
+                    g.message
+                  ) {
+                    e.games[id].message = null;
+                  }
+                });
+              }
+            });
+          }
+        } else {
+          await ch.messages.edit(
+            g.message,
+            await gamePayload(g, g.lang)
+          );
+
+          if (
+            finished &&
+            !deleting.has(g.message)
+          ) {
+            deleting.add(g.message);
+
+            later(async () => {
+              try {
+                await ch.messages.delete(
+                  g.message
+                );
+              } finally {
+                deleting.delete(g.message);
+
+                store.change((s, e) => {
+                  if (
+                    e.games[id]?.message ===
+                    g.message
+                  ) {
+                    e.games[id].message = null;
+                  }
+                });
+              }
+            });
+          }
+        }
+      } catch (err) {
+        if (
+          [10003, 10008].includes(err.code)
+        ) {
+          store.change((s, e) => {
+            if (e.games[id]) {
+              e.games[id].message = null;
+            }
+          });
+
+          if (
+            (
+              !g.privateUI ||
+              g.phase === 'invited'
+            ) &&
+            [
+              'invited',
+              'waiting',
+              'result',
+            ].includes(g.phase)
+          ) {
+            engine.end(id, '', true);
+          }
         } else {
           console.error(
             'Affichage duel :',
-            error.code || error.name
+            err.code || err.name
           );
         }
       }
     });
 
   const refreshBoards = async () => {
-    if (refreshing || !boardsDirty) {
-      return;
-    }
+    if (refreshing || !boardsDirty) return;
 
     refreshing = true;
     const version = boardsDirty;
 
     try {
-      for (const board of store.event().boards) {
+      for (const b of store.event().boards) {
         try {
-          const channel =
+          const ch =
             await client.channels.fetch(
-              board.channel
+              b.channel
             );
 
-          await channel.messages.edit(
-            board.message,
-            leaderboardPayload(
-              engine,
-              board.lang
-            )
+          await ch.messages.edit(
+            b.message,
+            leaderboardPayload(engine, b.lang)
           );
-        } catch (error) {
+        } catch (err) {
           if (
-            [10003, 10008].includes(error.code)
+            [10003, 10008].includes(err.code)
           ) {
-            store.change((state, event) => {
-              event.boards =
-                event.boards.filter(
-                  item =>
-                    item.message !==
-                    board.message
-                );
+            store.change((s, e) => {
+              e.boards = e.boards.filter(
+                x => x.message !== b.message
+              );
             });
           } else {
             console.error(
               'Classement :',
-              error.code || error.name
+              err.code || err.name
             );
           }
         }
@@ -1194,61 +1291,50 @@ async function main() {
     }
   };
 
-  const isStaff = interaction =>
-    interaction.memberPermissions?.has(
+  const isStaff = i =>
+    i.memberPermissions?.has(
       PermissionFlagsBits.ManageGuild
     ) ||
     (
       process.env.ADMIN_ROLE_ID &&
-      interaction.member?.roles?.cache?.has(
+      i.member?.roles?.cache?.has(
         process.env.ADMIN_ROLE_ID
       )
     ) ||
     (
       process.env.ADMIN_ROLE_ID &&
-      Array.isArray(
-        interaction.member?.roles
-      ) &&
-      interaction.member.roles.includes(
+      Array.isArray(i.member?.roles) &&
+      i.member.roles.includes(
         process.env.ADMIN_ROLE_ID
       )
     );
 
-  async function onCommand(interaction) {
-    if (!isStaff(interaction)) {
+  async function onCommand(i) {
+    if (!isStaff(i)) {
       throw new GameError('staff');
     }
 
-    await interaction.deferReply({
+    await i.deferReply({
       flags: MessageFlags.Ephemeral,
     });
 
     if (
-      interaction.commandName ===
-      'penalty-installer'
+      i.commandName === 'penalty-installer'
     ) {
-      const channel =
-        interaction.options.getChannel(
-          'salon',
-          true
-        );
+      const ch =
+        i.options.getChannel('salon', true);
 
       const lang =
-        interaction.options.getString(
-          'langue',
-          true
-        );
+        i.options.getString('langue', true);
 
       const image =
-        interaction.options.getString(
-          'image'
-        );
+        i.options.getString('image');
 
       if (
         image &&
         !/^https:\/\/\S+$/i.test(image)
       ) {
-        return interaction.editReply(
+        return i.editReply(
           'Pour l’image, utilise un lien HTTPS direct.'
         );
       }
@@ -1288,190 +1374,187 @@ async function main() {
         );
       }
 
-      const message =
-        await channel.send(payload);
+      const msg = await ch.send(payload);
 
-      store.change((state, event) => {
-        event.panels.push({
-          channel: channel.id,
-          message: message.id,
+      store.change((s, e) => {
+        e.panels.push({
+          channel: ch.id,
+          message: msg.id,
           lang,
         });
       });
 
-      return interaction.editReply(
-        `Menu installé dans <#${channel.id}>. ` +
-        'Les menus français et anglais partagent le même classement.'
+      return i.editReply(
+        `Menu installé dans <#${ch.id}>. Les menus français et anglais partagent le même classement.`
       );
     }
 
     if (
-      interaction.commandName ===
-      'penalty-evenement'
+      i.commandName === 'penalty-evenement'
     ) {
       if (
-        !interaction.options.getBoolean(
+        !i.options.getBoolean(
           'confirmer',
           true
         )
       ) {
-        return interaction.editReply(
+        return i.editReply(
           'Aucun changement. Mets confirmer sur Oui pour créer une nouvelle édition.'
         );
       }
 
       const event = createEvent(
-        interaction.options.getString(
-          'titre',
-          true
-        ),
-
-        interaction.options.getString(
-          'debut',
-          true
-        ),
-
-        interaction.options.getString(
-          'fin',
-          true
-        )
+        i.options.getString('titre', true),
+        i.options.getString('debut', true),
+        i.options.getString('fin', true)
       );
 
       const previous = store.event();
 
       for (
-        const game of Object.values(
+        const g of Object.values(
           previous.games
         )
       ) {
         if (
-          game.type === 'duel' &&
-          ['invited', 'waiting', 'result'].includes(
-            game.phase
-          )
+          g.type === 'duel' &&
+          [
+            'invited',
+            'waiting',
+            'result',
+          ].includes(g.phase)
         ) {
-          engine.end(game.id, '', true);
-          await publicDuel(game.id);
+          engine.end(g.id, '', true);
+          await publicDuel(g.id);
         }
       }
 
-      store.change(state => {
-        state.events[event.id] = event;
-        state.current = event.id;
+      store.change(s => {
+        s.events[event.id] = event;
+        s.current = event.id;
       });
 
       boardsDirty++;
 
-      return interaction.editReply(
-        `Nouvelle édition : **${clean(
-          event.title
-        )}**, du ${event.start} au ${event.end}, ` +
-        'jours inclus (heure de Paris).\n' +
-        'L’ancien classement est archivé. ' +
-        'Réinstalle les menus FR/EN et le classement avec les commandes habituelles.\n' +
+      return i.editReply(
+        `Nouvelle édition : **${clean(event.title)}**, du ${event.start} au ${event.end}, jours inclus (heure de Paris).\n` +
+        'L’ancien classement est archivé. Réinstalle les menus FR/EN et le classement avec les commandes habituelles.\n' +
         `ID de l’édition : \`${event.id}\``
       );
     }
 
     if (
-      interaction.commandName ===
-      'penalty-classement'
+      i.commandName === 'penalty-classement'
     ) {
       const lang =
-        interaction.options.getString(
-          'langue'
-        ) || 'fr';
+        i.options.getString('langue') ||
+        'fr';
 
-      const channel =
-        interaction.options.getChannel(
-          'salon'
-        );
+      const ch =
+        i.options.getChannel('salon');
 
-      if (!channel) {
-        return interaction.editReply(
+      if (!ch) {
+        return i.editReply(
           leaderboardPayload(engine, lang)
         );
       }
 
-      const message = await channel.send(
+      const msg = await ch.send(
         leaderboardPayload(engine, lang)
       );
 
-      store.change((state, event) => {
-        event.boards.push({
-          channel: channel.id,
-          message: message.id,
+      store.change((s, e) => {
+        e.boards.push({
+          channel: ch.id,
+          message: msg.id,
           lang,
         });
       });
 
-      return interaction.editReply(
-        `Classement publié dans <#${channel.id}>. ` +
-        'Ce message sera actualisé après les séries terminées, sous 15 secondes.'
+      return i.editReply(
+        `Classement publié dans <#${ch.id}>. Ce message sera actualisé après les séries terminées, sous 15 secondes.`
       );
     }
 
     if (
-      interaction.commandName ===
-      'penalty-export'
+      i.commandName ===
+      'penalty-reset-classement'
+    ) {
+      if (
+        !i.options.getBoolean(
+          'confirmer',
+          true
+        )
+      ) {
+        return i.editReply(
+          'Aucun changement. Choisis Oui pour remettre le classement à zéro.'
+        );
+      }
+
+      const archive =
+        engine.resetRankings(i.user.id);
+
+      boardsDirty++;
+
+      await refreshBoards();
+
+      return i.editReply(
+        'Classement commun FR/EN remis à zéro.\n' +
+        'Les tentatives du jour restent utilisées et les séries en cours peuvent être terminées.\n' +
+        `Archive des anciens scores : \`${archive}\`. Tu peux la télécharger avec /penalty-export edition:${archive}.\n` +
+        'Les menus existants restent valides.'
+      );
+    }
+
+    if (
+      i.commandName === 'penalty-export'
     ) {
       const state = store.read();
 
-      const edition =
-        interaction.options.getString(
-          'edition'
-        ) || state.current;
-
-      const event = state.events[edition];
+      const event = state.events[
+        i.options.getString('edition') ||
+        state.current
+      ];
 
       if (!event) {
-        return interaction.editReply(
+        return i.editReply(
           'Édition introuvable. Regarde /penalty-diagnostic pour les identifiants.'
         );
       }
 
-      const csvCell = value =>
-        `"${
-          String(value)
-            .replace(/^[=+\-@]/, "'$&")
-            .replace(/"/g, '""')
-        }"`;
-
-      const rows = [
-        [
-          'rang',
-          'discord_id',
-          'pseudo',
-          'points',
-          'series_terminees',
-          'meilleure_serie',
-        ],
-
-        ...engine.rankings(event).map(
-          user => [
-            user.rank,
-            user.id,
-            user.name,
-            user.points,
-            user.days,
-            user.best,
-          ]
-        ),
-      ];
+      const csvCell = v =>
+        `"${String(v)
+          .replace(/^[=+\-@]/, "'$&")
+          .replace(/"/g, '""')}"`;
 
       const csv =
         '\uFEFF' +
-        rows
-          .map(row =>
-            row.map(csvCell).join(';')
+        [
+          [
+            'rang',
+            'discord_id',
+            'pseudo',
+            'points',
+            'series_terminees',
+            'meilleure_serie',
+          ],
+          ...engine.rankings(event).map(u => [
+            u.rank,
+            u.id,
+            u.name,
+            u.points,
+            u.days,
+            u.best,
+          ]),
+        ]
+          .map(r =>
+            r.map(csvCell).join(';')
           )
           .join('\r\n');
 
-      return interaction.editReply({
+      return i.editReply({
         content:
-          'Tous les scores de cette édition. ' +
-          'Aucun transfert automatique vers le bot des pronos.',
-
+          'Tous les scores de cette édition. Aucun transfert automatique vers le bot des pronos.',
         files: [
           new AttachmentBuilder(
             Buffer.from(csv),
@@ -1485,56 +1568,49 @@ async function main() {
     }
 
     if (
-      interaction.commandName ===
-      'penalty-diagnostic'
+      i.commandName === 'penalty-diagnostic'
     ) {
-      const state = store.read();
-      const event = store.event();
+      const s = store.read();
+      const e = store.event();
 
-      const activeDuels =
-        Object.values(event.games).filter(
-          game =>
-            game.type === 'duel' &&
-            [
-              'invited',
-              'waiting',
-              'result',
-            ].includes(game.phase)
-        ).length;
+      const editions = Object.values(
+        s.events
+      )
+        .slice(-20)
+        .map(
+          x =>
+            `\`${x.id}\` · ${clean(x.title)} (${x.start} → ${x.end})`
+        )
+        .join('\n');
 
-      const editions =
-        Object.values(state.events)
-          .slice(-20)
-          .map(
-            item =>
-              `\`${item.id}\` · ` +
-              `${clean(item.title)} ` +
-              `(${item.start} → ${item.end})`
-          )
-          .join('\n');
-
-      return interaction.editReply({
+      return i.editReply({
         embeds: [
           baseEmbed()
             .setTitle('Diagnostic')
             .setDescription(
-              `Édition : **${clean(
-                event.title
-              )}**\n` +
-              `Dates : ${event.start} → ${event.end}\n` +
+              `Édition : **${clean(e.title)}**\n` +
+              `Dates : ${e.start} → ${e.end}\n` +
               `Aujourd’hui à Paris : ${dayInParis()}\n` +
               `Joueurs classés : ${engine.rankings().length}\n` +
-              `Duels actifs : ${activeDuels}\n` +
-              `Stockage : \`${clean(
-                store.file
-              )}\`\n` +
-              'Volume Railway détecté : ' +
-              (
+              `Duels actifs : ${
+                Object.values(e.games)
+                  .filter(
+                    g =>
+                      g.type === 'duel' &&
+                      [
+                        'invited',
+                        'waiting',
+                        'result',
+                      ].includes(g.phase)
+                  ).length
+              }\n` +
+              `Stockage : \`${clean(store.file)}\`\n` +
+              `Volume Railway détecté : ${
                 process.env.RAILWAY_VOLUME_MOUNT_PATH
                   ? 'oui'
                   : 'non / environnement local'
-              ) +
-              '\n\nÉditions archivées et actuelle :\n' +
+              }\n\n` +
+              'Éditions archivées et actuelle :\n' +
               editions
             )
             .setFooter({
@@ -1546,29 +1622,26 @@ async function main() {
     }
 
     if (
-      interaction.commandName ===
+      i.commandName ===
       'penalty-fermer-duel'
     ) {
-      const game = engine.end(
-        interaction.options.getString(
-          'id',
-          true
-        ),
-        interaction.user.id,
+      const g = engine.end(
+        i.options.getString('id', true),
+        i.user.id,
         true
       );
 
-      await publicDuel(game.id);
+      await publicDuel(g.id);
 
-      return interaction.editReply(
+      return i.editReply(
         'Duel fermé. Aucun point n’a été modifié.'
       );
     }
   }
 
-  async function onComponent(interaction) {
+  async function onComponent(i) {
     const parts =
-      interaction.customId.split(':');
+      i.customId.split(':');
 
     const kind = parts[0];
 
@@ -1577,17 +1650,17 @@ async function main() {
         ? 'en'
         : 'fr';
 
-    const text = T[lang];
+    const t = T[lang];
 
     if (kind === 'p') {
       const [, eventId, action] = parts;
-      const event = store.event();
+      const e = store.event();
 
-      if (event.id !== eventId) {
+      if (e.id !== eventId) {
         throw new GameError('oldEvent');
       }
 
-      await interaction.deferReply({
+      await i.deferReply({
         flags: MessageFlags.Ephemeral,
       });
 
@@ -1595,78 +1668,99 @@ async function main() {
         action === 'daily' ||
         action === 'training'
       ) {
-        const game = engine.solo(
-          interaction.user.id,
-
-          interaction.member?.displayName ||
-          interaction.user.globalName ||
-          interaction.user.username,
-
+        const g = engine.solo(
+          i.user.id,
+          i.member?.displayName ||
+            i.user.globalName ||
+            i.user.username,
           action === 'training'
         );
 
-        return interaction.editReply(
-          await gamePayload(game, lang)
+        return i.editReply(
+          await gamePayload(g, lang)
         );
       }
 
       if (action === 'rules') {
-        return interaction.editReply({
+        return i.editReply({
           embeds: [
             baseEmbed()
-              .setTitle(
-                `📖 ${text.rules}`
-              )
-              .setDescription(
-                text.rulesText
-              ),
+              .setTitle(`📖 ${t.rules}`)
+              .setDescription(t.rulesText),
           ],
         });
       }
 
       if (action === 'ranking') {
-        return interaction.editReply(
+        return i.editReply(
           leaderboardPayload(
             engine,
             lang,
-            interaction.user.id
+            i.user.id
           )
         );
+      }
+
+      if (action === 'myrank') {
+        const ranks =
+          engine.rankings();
+
+        const own = ranks.find(
+          u => u.id === i.user.id
+        );
+
+        return i.editReply({
+          embeds: [
+            baseEmbed()
+              .setTitle(
+                lang === 'en'
+                  ? '📍 My rank'
+                  : '📍 Mon classement'
+              )
+              .setDescription(
+                own
+                  ? `🏆 **#${own.rank} / ${ranks.length}**\n\n` +
+                    `⚽ **${own.points} points**\n\n` +
+                    (
+                      lang === 'en'
+                        ? 'One shared leaderboard for French and English players.'
+                        : 'Un classement commun aux joueurs français et anglais.'
+                    )
+                  : t.noRank
+              ),
+          ],
+          components: [],
+        });
       }
 
       if (action === 'profile') {
         const own =
           engine.rankings().find(
-            user =>
-              user.id === interaction.user.id
+            u => u.id === i.user.id
           );
 
         const today =
-          Object.values(event.games).find(
-            game =>
-              game.type === 'solo' &&
-              game.users[0] ===
-                interaction.user.id &&
-              game.day === dayInParis()
+          Object.values(e.games).find(
+            g =>
+              g.type === 'solo' &&
+              g.users[0] === i.user.id &&
+              g.day === dayInParis()
           );
 
-        return interaction.editReply({
+        return i.editReply({
           embeds: [
             baseEmbed()
-              .setTitle(
-                `📊 ${text.profile}`
-              )
+              .setTitle(`📊 ${t.profile}`)
               .setDescription(
-                (
+                `${
                   lang === 'en'
                     ? '**Event points**'
                     : '**Points de l’événement**'
-                ) +
-                ` : ${own?.points || 0}\n\n` +
+                } : ${own?.points || 0}\n\n` +
                 `🏆 ${
                   own
                     ? `#${own.rank}`
-                    : text.noRank
+                    : t.noRank
                 }\n\n` +
                 `⚽ ${
                   lang === 'en'
@@ -1697,17 +1791,45 @@ async function main() {
       }
 
       if (action === 'duel') {
-        engine.active(event);
+        engine.active(e);
 
-        return interaction.editReply({
-          content: text.pickOpponent,
+        const active =
+          Object.values(e.games).find(
+            g =>
+              g.type === 'duel' &&
+              [
+                'invited',
+                'waiting',
+                'result',
+              ].includes(g.phase) &&
+              g.expires > Date.now() &&
+              g.users.includes(i.user.id)
+          );
 
+        if (active) {
+          await remember(
+            active,
+            i,
+            lang
+          );
+
+          return i.editReply(
+            await privateGamePayload(
+              active,
+              lang,
+              i.user.id
+            )
+          );
+        }
+
+        return i.editReply({
+          content: t.pickOpponent,
           components: [
             new ActionRowBuilder()
               .addComponents(
                 new UserSelectMenuBuilder()
                   .setCustomId(
-                    `u:${event.id}:${lang}`
+                    `u:${e.id}:${lang}`
                   )
                   .setPlaceholder(
                     lang === 'en'
@@ -1728,55 +1850,55 @@ async function main() {
       kind === 's' ||
       kind === 'n'
     ) {
-      await interaction.deferUpdate();
+      await i.deferUpdate();
 
-      const game =
+      const g =
         kind === 's'
           ? engine.shoot(
               parts[1],
-              interaction.user.id,
+              i.user.id,
               Number(parts[2]),
               Number(parts[3])
             )
           : engine.next(
               parts[1],
-              interaction.user.id,
+              i.user.id,
               Number(parts[2])
             );
 
       if (kind === 's') {
         if (
-          game.type === 'solo' &&
-          game.phase === 'finished'
+          g.type === 'solo' &&
+          g.phase === 'finished'
         ) {
           boardsDirty++;
         }
 
         try {
-          await interaction.editReply(
+          await i.editReply(
             await gamePayload(
-              game,
+              g,
               lang,
               true
             )
           );
 
           await sleep(650);
-        } catch (error) {
+        } catch (err) {
           console.error(
             'Transition visuelle :',
-            error.code || error.name
+            err.code || err.name
           );
         }
       }
 
-      return interaction.editReply(
-        await gamePayload(game, lang)
+      return i.editReply(
+        await gamePayload(g, lang)
       );
     }
 
     if (kind === 'u') {
-      await interaction.deferUpdate();
+      await i.deferUpdate();
 
       if (
         parts[1] !== store.event().id
@@ -1785,54 +1907,58 @@ async function main() {
       }
 
       const target =
-        await interaction.guild.members.fetch(
-          interaction.values[0]
+        await i.guild.members.fetch(
+          i.values[0]
         );
 
       if (target.user.bot) {
         throw new GameError('bot');
       }
 
-      const game = engine.challenge(
-        interaction.user.id,
-
-        interaction.member.displayName ||
-        interaction.user.username,
-
+      const g = engine.challenge(
+        i.user.id,
+        i.member.displayName ||
+          i.user.username,
         target.id,
         target.displayName,
-        interaction.channelId,
+        i.channelId,
         lang
       );
 
       try {
+        store.change((s, e) => {
+          e.games[g.id].privateUI = true;
+        });
+
         const payload =
-          await gamePayload(game, lang);
+          await gamePayload(g, lang);
 
         const message =
-          await interaction.channel.send({
+          await i.channel.send({
             ...payload,
-
             content: `<@${target.id}>`,
-
             allowedMentions: {
               users: [target.id],
             },
           });
 
-        store.change((state, event) => {
-          event.games[game.id].message =
+        store.change((s, e) => {
+          e.games[g.id].message =
             message.id;
         });
 
-        return interaction.editReply({
-          content: text.invitationSent,
-          embeds: [],
-          components: [],
-        });
-      } catch (error) {
-        engine.end(game.id, '', true);
-        throw error;
+        await remember(g, i, lang);
+
+        return i.editReply(
+          await privateGamePayload(
+            getGame(g.id),
+            lang,
+            i.user.id
+          )
+        );
+      } catch (err) {
+        engine.end(g.id, '', true);
+        throw err;
       }
     }
 
@@ -1844,59 +1970,82 @@ async function main() {
         turnString,
       ] = parts;
 
-      const game = getGame(id);
+      const g = getGame(id);
       const turn = Number(turnString);
 
       if (
-        !game.users.includes(
-          interaction.user.id
-        )
+        !g.users.includes(i.user.id)
       ) {
         throw new GameError('owner');
       }
 
       if (action === 'accept') {
-        await interaction.deferUpdate();
+        await i.deferReply({
+          flags:
+            MessageFlags.Ephemeral,
+        });
 
         engine.accept(
           id,
-          interaction.user.id
+          i.user.id
         );
+
+        if (g.privateUI) {
+          await remember(
+            g,
+            i,
+            lang
+          );
+        } else {
+          await i.editReply({
+            content:
+              lang === 'en'
+                ? 'Challenge accepted.'
+                : 'Défi accepté.',
+          });
+        }
 
         return publicDuel(id);
       }
 
       if (action === 'next') {
-        await interaction.deferUpdate();
+        await i.deferUpdate();
 
         engine.next(
           id,
-          interaction.user.id,
+          i.user.id,
           turn
         );
+
+        if (g.privateUI) {
+          await remember(
+            g,
+            i,
+            lang
+          );
+        }
 
         return publicDuel(id);
       }
 
-      await interaction.deferReply({
-        flags: MessageFlags.Ephemeral,
+      await i.deferReply({
+        flags:
+          MessageFlags.Ephemeral,
       });
 
       if (action === 'leave') {
-        return interaction.editReply({
-          content: text.exitQuestion,
-
+        return i.editReply({
+          content: t.exitQuestion,
           components: [
             row(
               button(
                 `q:${id}:${lang}`,
-                text.confirm,
+                t.confirm,
                 ButtonStyle.Danger
               ),
-
               button(
                 `x:${id}:${lang}`,
-                text.cancel,
+                t.cancel,
                 ButtonStyle.Secondary
               )
             ),
@@ -1907,55 +2056,51 @@ async function main() {
       engine.active(store.event());
 
       if (
-        game.phase !== 'waiting' ||
-        game.shots.length !== turn
+        g.phase !== 'waiting' ||
+        g.shots.length !== turn
       ) {
         throw new GameError('stale');
       }
 
       if (
-        game.expires < Date.now()
+        g.expires < Date.now()
       ) {
         throw new GameError('expired');
       }
 
       if (
-        !['shot', 'dive'].includes(action)
+        !['shot', 'dive'].includes(
+          action
+        )
       ) {
         throw new GameError('invalid');
       }
 
-      const playerIndex =
+      const expected =
         action === 'shot'
           ? turn % 2
-          : 1 - (turn % 2);
+          : 1 - turn % 2;
 
       if (
-        game.users[playerIndex] !==
-        interaction.user.id
+        g.users[expected] !== i.user.id
       ) {
         throw new GameError('owner');
       }
 
       if (
-        game.pending[action] !== undefined
+        g.pending[action] !== undefined
       ) {
         throw new GameError('locked');
       }
 
-      return interaction.editReply({
+      return i.editReply({
         content:
-          `${
+          `${action === 'shot' ? '⚽' : '🧤'} ` +
+          `**${
             action === 'shot'
-              ? '⚽'
-              : '🧤'
-          } **${
-            action === 'shot'
-              ? text.shoot
-              : text.dive
-          }**\n\n` +
-          text.privateHint,
-
+              ? t.shoot
+              : t.dive
+          }**\n\n${t.privateHint}`,
         components: [
           directions(
             `c:${id}:${turn}:${action}`,
@@ -1966,52 +2111,58 @@ async function main() {
     }
 
     if (kind === 'c') {
-      await interaction.deferUpdate();
+      await i.deferUpdate();
 
       engine.choose(
         parts[1],
-        interaction.user.id,
+        i.user.id,
         Number(parts[2]),
         parts[3],
         Number(parts[4])
       );
 
-      await interaction.editReply({
-        content: text.lockedChoice,
+      await i.editReply({
+        content: t.lockedChoice,
         embeds: [],
         components: [],
       });
+
+      deletePrivate(i);
 
       return publicDuel(parts[1]);
     }
 
     if (kind === 'q') {
-      await interaction.deferUpdate();
+      await i.deferUpdate();
 
       engine.end(
         parts[1],
-        interaction.user.id
+        i.user.id
       );
 
-      await interaction.editReply({
-        content: text.closed,
+      await i.editReply({
+        content: t.closed,
         components: [],
       });
+
+      deletePrivate(i);
 
       return publicDuel(parts[1]);
     }
 
     if (kind === 'x') {
-      await interaction.deferUpdate();
+      await i.deferUpdate();
 
-      return interaction.editReply({
+      await i.editReply({
         content:
           lang === 'en'
-            ? 'Back to the duel message to keep playing.'
-            : 'Retourne au message du duel pour continuer.',
-
+            ? 'Continue from your private game screen.'
+            : 'Continue depuis ton écran de jeu privé.',
         components: [],
       });
+
+      deletePrivate(i);
+      return;
     }
 
     throw new GameError('invalid');
@@ -2019,64 +2170,53 @@ async function main() {
 
   client.on(
     Events.InteractionCreate,
-    async interaction => {
+    async i => {
       if (
-        interaction.guildId !==
+        i.guildId !==
           process.env.DISCORD_GUILD_ID ||
         (
-          !interaction.isChatInputCommand() &&
-          !interaction.isButton() &&
-          !interaction.isUserSelectMenu()
+          !i.isChatInputCommand() &&
+          !i.isButton() &&
+          !i.isUserSelectMenu()
         )
       ) {
         return;
       }
 
       try {
-        if (
-          interaction.isChatInputCommand()
-        ) {
-          await onCommand(interaction);
+        if (i.isChatInputCommand()) {
+          await onCommand(i);
         } else {
-          await onComponent(interaction);
+          await onComponent(i);
         }
-      } catch (error) {
+      } catch (err) {
         const lang =
-          interaction.customId?.endsWith(
-            ':en'
-          )
+          i.customId?.endsWith(':en')
             ? 'en'
             : 'fr';
 
-        let content;
-
-        if (
-          error instanceof GameError &&
-          error.message === 'cooldown'
-        ) {
-          content =
-            lang === 'en'
+        const content =
+          err instanceof GameError &&
+          err.message === 'cooldown'
+            ? lang === 'en'
               ? 'Please wait 30 seconds between invitations.'
-              : 'Attends 30 secondes entre deux invitations.';
-        } else {
-          const key =
-            error instanceof GameError
-              ? error.message
-              : 'general';
-
-          content =
-            T[lang].errors[key] ||
-            T[lang].errors.general;
-        }
+              : 'Attends 30 secondes entre deux invitations.'
+            : (
+                T[lang].errors[
+                  err instanceof GameError
+                    ? err.message
+                    : 'general'
+                ] ||
+                T[lang].errors.general
+              );
 
         if (
-          !(error instanceof GameError)
+          !(err instanceof GameError)
         ) {
           console.error(
             'Interaction :',
-            error.code || error.name,
-
-            error.message?.replace(
+            err.code || err.name,
+            err.message?.replace(
               /https:\/\/\S+/g,
               '[URL]'
             )
@@ -2085,23 +2225,24 @@ async function main() {
 
         try {
           if (
-            interaction.replied ||
-            interaction.deferred
+            i.replied ||
+            i.deferred
           ) {
-            await interaction.followUp({
+            await i.followUp({
               content,
               flags:
                 MessageFlags.Ephemeral,
             });
           } else {
-            await interaction.reply({
+            await i.reply({
               content,
               flags:
                 MessageFlags.Ephemeral,
             });
           }
         } catch {
-          // La partie a déjà été sauvegardée.
+          // Les données de jeu sont conservées
+          // même si une réponse Discord expire.
         }
       }
     }
@@ -2111,40 +2252,38 @@ async function main() {
     Events.ClientReady,
     async () => {
       console.log(
-        `Connecté : ${client.user.tag}. ` +
-        `Édition ${store.event().id}. ` +
-        'Stockage SQLite actif.'
+        `Connecté : ${client.user.tag}. Édition ${store.event().id}. Stockage SQLite actif.`
       );
 
       try {
         for (
-          const game of engine.expire()
+          const g of engine.expire()
         ) {
-          await publicDuel(game.id);
+          await publicDuel(g.id);
         }
 
         for (
-          const game of Object.values(
+          const g of Object.values(
             store.event().games
           )
         ) {
           if (
-            game.type === 'duel' &&
+            g.type === 'duel' &&
             [
               'invited',
               'waiting',
               'result',
-            ].includes(game.phase)
+            ].includes(g.phase)
           ) {
-            await publicDuel(game.id);
+            await publicDuel(g.id);
           }
         }
 
         await refreshBoards();
-      } catch (error) {
+      } catch (err) {
         console.error(
           'Reprise :',
-          error.code || error.name
+          err.code || err.name
         );
       }
     }
@@ -2152,12 +2291,11 @@ async function main() {
 
   client.on(
     Events.Error,
-    error => {
+    e =>
       console.error(
         'Discord :',
-        error.code || error.name
-      );
-    }
+        e.code || e.name
+      )
   );
 
   const tick = setInterval(
@@ -2166,16 +2304,16 @@ async function main() {
 
       try {
         for (
-          const game of engine.expire()
+          const g of engine.expire()
         ) {
-          await publicDuel(game.id);
+          await publicDuel(g.id);
         }
 
         await refreshBoards();
-      } catch (error) {
+      } catch (err) {
         console.error(
           'Entretien :',
-          error.code || error.name
+          err.code || err.name
         );
       }
     },
@@ -2195,9 +2333,7 @@ async function main() {
         process.env.DISCORD_CLIENT_ID,
         process.env.DISCORD_GUILD_ID
       ),
-      {
-        body: commands(),
-      }
+      { body: commands() }
     );
 
   await client.login(
@@ -2208,7 +2344,13 @@ async function main() {
     if (closing) return;
 
     closing = true;
+
     clearInterval(tick);
+
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
+
     client.destroy();
 
     await Promise.allSettled(
@@ -2249,10 +2391,10 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch(error => {
+  main().catch(err => {
     console.error(
       'Démarrage :',
-      error.message?.replace(
+      err.message?.replace(
         /https:\/\/\S+/g,
         '[URL]'
       )
@@ -2270,4 +2412,5 @@ module.exports = {
   directions,
   T,
   main,
+  Engine,
 };
